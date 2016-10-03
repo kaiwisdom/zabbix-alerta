@@ -1,46 +1,50 @@
 Zabbix-Alerta Gateway
 =====================
 
-Consolidate Zabbix alerts from across multiple sites into a single "at-a-glance" console by using a custom Zabbix [alertscript](https://www.zabbix.com/documentation/2.2/manual/config/notifications/media/script).
+Consolidate Zabbix alerts from across multiple sites into a single
+"at-a-glance" console by using a custom Zabbix [alertscript](https://www.zabbix.com/documentation/2.2/manual/config/notifications/media/script).
 
 Transform this ...
 
-![zabbix](/docs/images/zabbix-alerta-before.png?raw=true)
+![zabbix](/docs/images/zabbix3-alerta-before.png?raw=true)
 
 Into this ...
 
-![alerta](/docs/images/zabbix-alerta-after.png?raw=true)
+![alerta](/docs/images/zabbix3-alerta-after.png?raw=true)
 
 Installation
 ------------
 
-Copy the `zabbix_alerta.py` script into the `AlertScriptsPath` directory which is by default `/usr/lib/zabbix/alertscripts` and make it executable:
+Use `pip` to install the the `zabbix-alerta` script and then create a symlink
+to it in the `AlertScriptsPath` directory which is by default `/usr/lib/zabbix/alertscripts`:
 
-    $ wget https://raw.github.com/alerta/zabbix-alerta/master/zabbix_alerta.py
-    $ cp zabbix_alerta.py /usr/lib/zabbix/alertscripts
-    $ chmod 755 /usr/lib/zabbix/alertscripts/zabbix_alerta.py
+    $ pip install zabbix-alerta
+    $ ln -s `which zabbix-alerta` /usr/lib/zabbix/alertscripts
+
 
 Configuration
 -------------
 
-To forward zabbix events to Alerta a new media script needs to be created and associated with a user. Follow the steps below as a Zabbix Admin user...
+To forward Zabbix events to Alerta a new media script needs to be created
+and associated with a user. Follow the steps below as a Zabbix Admin user...
 
 1/ Create a new media type [Admininstration > Media Types > Create Media Type]
 
 ```
-Name: Alerta API
+Name: Alerta
 Type: Script
-Script name: zabbix_alerta.py
-Script parameters: 
+Script name: zabbix-alerta
+Script parameters:
     1st: {ALERT.SENDTO}
     2nd: {ALERT.SUBJECT}
     3rd: {ALERT.MESSAGE}
+Enabled: [x]
 ```
 
 2/ Modify the Media for the Admin user [Administration > Users]
 
 ```
-Type: alerta
+Type: Alerta
 Send to: http://x.x.x.x:8080         <--- API hostname/IP and port of alerta server
 When active: 1-7,00:00-24:00
 Use if severity: (all)
@@ -52,28 +56,33 @@ Status: Enabled
 
 ```
 Name: Forward to Alerta
-Default Subject: {TRIGGER.STATUS}: {TRIGGER.NAME}
 ```
-
 ```
-Default Message:
-
+Default subject:
+{TRIGGER.STATUS}: {TRIGGER.NAME}
+```
+```
+Default message:
 resource={HOST.NAME1}
 event={ITEM.KEY1}
+environment=Production
+severity={TRIGGER.SEVERITY}!!
+status={TRIGGER.STATUS}
+ack={EVENT.ACK.STATUS}
+service={TRIGGER.HOSTGROUP.NAME}
 group=Zabbix
 value={ITEM.VALUE1}
-status={TRIGGER.STATUS}
-severity={TRIGGER.SEVERITY}
-ack={EVENT.ACK.STATUS}
-environment=Production
-service={TRIGGER.HOSTGROUP.NAME}
-text={TRIGGER.NAME}
+text={TRIGGER.STATUS}: {TRIGGER.NAME}
+tags={EVENT.TAGS}
+attributes.ip={HOST.IP1}
+attributes.thresholdInfo={TRIGGER.TEMPLATE.NAME}: {TRIGGER.EXPRESSION}
+attributes.moreInfo=<a href="http://x.x.x.x/tr_events.php?triggerid={TRIGGER.ID}&eventid={EVENT.ID}">Zabbix console</a>
 type=zabbixAlert
-tags=ipaddr={HOST.IP1},id={TRIGGER.ID},event_id={EVENT.ID}
-thresholdInfo={TRIGGER.TEMPLATE.NAME}: {TRIGGER.EXPRESSION}
+dateTime={EVENT.DATE}T{EVENT.TIME}Z
+
 ```
 
-For a full list of trigger macros see https://www.zabbix.com/documentation/2.2/manual/appendix/macros/supported_by_location
+https://www.zabbix.com/documentation/3.2/manual/appendix/macros/supported_by_location
 
 To send OK events ...
 
@@ -102,14 +111,117 @@ Send to Users: Admin
 Send only to: Alerta API
 ```
 
-More Information
-----------------
+Advanced Configuration
+----------------------
 
-See the [PagerDuty guide to configuring Zabbix integrations][1] for an alertnative explanation with screenshots.
+Configuration Profiles
+~~~
 
-[1]: <http://www.pagerduty.com/docs/guides/zabbix-integration-guide/> "PagerDuty Zabbix Integration Guide"
+Additional configuration options are available if you use a profile for the `sendto` value.
+
+  * endpoint
+  * API key
+  * disable ssl verify
+  * debug
+
+
+
+    # vi /etc/default/zabbix-server
+    START=yes
+    ALERTA_CONF_FILE=/etc/alerta.conf
+    or /var/lib/zabbix/.alerta.conf
+
+    vi /etc/alerta.conf
+
+    [default]
+
+Setting Alert Environment
+~~~~
+
+Using a custom user macro called `{$ENVIRONMENT}` it is possible to set the
+environment of alerts received by Alerta in Zabbix. By default the environment
+will be `Production` but this can be overidden at the host, template group
+or global level using the `{$ENVIRONMENT}` macro.
+
+Use Zabbix severities and colors in Alerta
+~~~~
+
+
+    Numerical trigger severity. Possible values:
+    0 - Not classified,
+    1 - Information,
+    2 - Warning,
+    3 - Average,
+    4 - High,
+    5 - Disaster.
+    Supported starting from Zabbix 1.6.2.
+
+
+```python
+SEVERITY_MAP = {
+    'Disaster'      : 0,
+    'High'          : 1,
+    'Average'       : 2,
+    'Warning'       : 3,
+    'Information'   : 4,
+    'OK'            : 5,
+    'Not classified': 6,
+    'unknown'       : 9
+}
+```
+
+```javascript
+'use strict';
+angular.module('config', [])
+  .constant('config', {
+    'endpoint'    : "/api",
+    'provider'    : "basic",
+    'colors'      : {
+      'severity': {
+        'Disaster'      : '#E45959',
+        'High'          : '#E97659',
+        'Average'       : '#FFA059',
+        'Warning'       : '#FFC859',
+        'Information'   : '#7499FF',
+        'Not classified': '#97AAB3',
+        'OK'            : '#59DB8F',
+        'unknown'       : '#BA2222'
+      }
+    },
+    'severity'    : {
+      'Disaster'      : 0,
+      'High'          : 1,
+      'Average'       : 2,
+      'Warning'       : 3,
+      'Information'   : 4,
+      'OK'            : 5,
+      'Not classified': 6,
+      'unknown'       : 9
+    }
+});
+```
+
+Troubleshooting
+---------------
+
+
+vi /etc/zabbix/zabbix_server.conf
+DebugLevel=4
+
+tail -f /var/log/zabbix/zabbix_server.log
+
+
+See the [PagerDuty guide](http://www.pagerduty.com/docs/guides/zabbix-integration-guide/)
+to configuring Zabbix integrations for an example installation with screenshots.
+
+To Do
+-----
+
+1. Add support for heartbeats
+2. bi-directional integration like [opsgenie](https://www.opsgenie.com/docs/integrations/zabbix/rich-integration)
+3.
 
 License
 -------
 
-Copyright (c) 2014 Nick Satterly. Available under the MIT License.
+Copyright (c) 2013-2016 Nick Satterly. Available under the MIT License.
